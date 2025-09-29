@@ -1,0 +1,143 @@
+volumes:
+  nextcloud:
+  db:
+
+services:
+  db:
+    image: mariadb:11.4
+    restart: always
+    command: --transaction-isolation=READ-COMMITTED --log-bin=binlog --binlog-format=ROW
+    volumes:
+      - db:/var/lib/mysql
+      - ./nextcloud.cnf:/etc/mysql/conf.d/nextcloud.cnf:ro
+    networks:
+      - {{ nextcloud_network_name }}
+    environment:
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/db_root_password
+      MARIADB_PASSWORD_FILE: /run/secrets/db_password
+      MYSQL_DATABASE: {{ nextcloud_db_name }}
+      MYSQL_USER: {{ nextcloud_db_user }}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    secrets:
+      - db_root_password
+      - db_password
+      
+  redis:
+    image: redis:7-alpine
+    container_name: nextcloud-redis
+    restart: always
+    environment:
+      TZ: Europe/Tallinn
+    command: redis-server --maxmemory ${REDIS_MAX_MEMORY:-512mb} --maxmemory-policy allkeys-lru
+    networks:
+      - {{ nextcloud_network_name }}
+    depends_on:
+      - db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    
+  app:
+    container_name: nextcloud
+    image: nextcloud:${NEXTCLOUD_VERSION:-31}
+    restart: always
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - nextcloud:/var/www/html
+      - {{ nextcloud_install_path }}/hooks/pre-installation:/docker-entrypoint-hooks.d/pre-installation
+      - {{ nextcloud_install_path }}/hooks/post-installation:/docker-entrypoint-hooks.d/post-installation
+      - {{ nextcloud_install_path }}/hooks/pre-upgrade:/docker-entrypoint-hooks.d/pre-upgrade
+      - {{ nextcloud_install_path }}/hooks/post-upgrade:/docker-entrypoint-hooks.d/post-upgrade
+      - {{ nextcloud_install_path }}/hooks/before-starting:/docker-entrypoint-hooks.d/before-starting
+    environment:
+      - TZ=Europe/Tallinn
+      - REDIS_HOST=redis
+      - MYSQL_PASSWORD_FILE=/run/secrets/db_password
+      - MYSQL_DATABASE={{ nextcloud_db_name }}
+      - MYSQL_USER={{ nextcloud_db_user }}
+      - MYSQL_HOST=db
+      - NEXTCLOUD_ADMIN_USER={{ nextcloud_admin_user }}
+      - NEXTCLOUD_ADMIN_PASSWORD_FILE=/run/secrets/nextcloud_admin_password
+      - OVERWRITEHOST={{ nextcloud_subdomain }}.{{ vm_hostname }}
+      - OVERWRITEPROTOCOL=https
+      - OBJECTSTORE_S3_HOST=s3.pilw.io
+      - OBJECTSTORE_S3_BUCKET={{ s3_bucket }}
+      - OBJECTSTORE_S3_REGION=ee
+      - OBJECTSTORE_S3_KEY_FILE=/run/secrets/s3_key
+      - OBJECTSTORE_S3_SECRET_FILE=/run/secrets/s3_secret
+      - OBJECTSTORE_S3_SSE_C_KEY_FILE=/run/secrets/s3_sse
+      - OBJECTSTORE_S3_PORT=443
+      - OBJECTSTORE_S3_SSL=true
+      - OBJECTSTORE_S3_USEPATH_STYLE=true
+      - OBJECTSTORE_S3_AUTOCREATE=true
+      - PHP_MEMORY_LIMIT=3500M
+    networks:
+      - {{ nextcloud_network_name }}
+      - {{ traefik_network_name }}
+    secrets:
+      - s3_key
+      - s3_secret
+      - s3_sse
+      - nextcloud_admin_password
+      - db_password
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/status.php"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    labels:
+      # Traefik configuration
+      - "traefik.enable=true"
+      - "traefik.http.routers.nextcloud.rule=Host(`{{ nextcloud_subdomain }}.{{ vm_hostname }}`)"
+      - "traefik.http.routers.nextcloud.entrypoints=websecure"
+      - "traefik.http.routers.nextcloud.tls.certresolver=letsencrypt"
+      - "traefik.http.services.nextcloud.loadbalancer.server.port=80"
+      - "traefik.docker.network={{ traefik_network_name }}"
+      
+      # Apply middlewares
+      - "traefik.http.routers.nextcloud.middlewares=nextcloud-headers@file,nextcloud-dav@file"
+
+secrets:
+    s3_key:
+      file: {{ nextcloud_install_path }}/s3_key.txt
+    s3_secret:
+      file: {{ nextcloud_install_path }}/s3_secret.txt
+    s3_sse:
+      file: {{ nextcloud_install_path }}/s3_sse_c_key.txt
+    nextcloud_admin_password:
+      file: {{ nextcloud_install_path }}/nextcloud_admin_password.txt
+    db_root_password:
+      file: {{ nextcloud_install_path }}/db_root_password.txt
+    db_password:
+      file: {{ nextcloud_install_path }}/db_password.txt
+networks:
+  {{ nextcloud_network_name }}:
+    internal: true
+  {{ traefik_network_name }}:
+    external: true

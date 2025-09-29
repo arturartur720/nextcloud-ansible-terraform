@@ -1,0 +1,45 @@
+[DEFAULT]
+# Whitelist localhost and private networks to prevent self-banning
+ignoreip = 127.0.0.1/8 ::1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+# Ban time: 30 minutes
+bantime = 1800
+# Find time: 10 minutes
+findtime = 600
+# Max retry before ban
+maxretry = 5
+# Email notifications
+destemail = {{ admin_email }}
+sendername = Fail2Ban
+# Action: ban and send email with log lines
+action = %(action_mwl)s
+
+[sshd]
+enabled = true
+port = 22
+filter = sshd
+logpath = /var/log/auth.log
+# Increased from 3 to 5 to prevent too aggressive banning
+maxretry = 5
+# Custom ban time for SSH: 30 minutes
+bantime = 1800
+findtime = 600
+
+# Note: sshd-ddos filter removed as it's not included by default
+# and causes fail2ban startup errors
+
+[postfix]
+enabled = true
+port = smtp,submission,smtps
+filter = postfix
+logpath = /var/log/mail.log
+maxretry = 5
+
+[dovecot]
+enabled = true
+port = pop3,pop3s,imap,imaps,submission,sieve
+filter = dovecot
+logpath = /var/log/mail.log
+maxretry = 5
+
+# Note: postfix-sasl filter removed as it may not exist
+# on all systems and causes startup errors

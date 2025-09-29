@@ -1,0 +1,199 @@
+---
+- name: Create Traefik directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ traefik_install_path }}"
+    - "{{ traefik_install_path }}/conf.d"
+    - "{{ traefik_install_path }}/certs"
+
+- name: Create Docker network for Traefik
+  docker_network:
+    name: "{{ traefik_network_name }}"
+
+- name: Create acme.json file for production
+  file:
+    path: "{{ traefik_acme_storage }}"
+    state: touch
+    mode: '0600'
+
+- name: Create acme-staging.json file for staging
+  file:
+    path: "{{ traefik_install_path }}/acme-staging.json"
+    state: touch
+    mode: '0600'
+
+- name: Generate bcrypt htpasswd string if plain password provided
+  when: traefik_password is defined and traefik_password != ""
+  vars:
+    _gen_cmd: "htpasswd -nbB '{{ traefik_user }}' '{{ traefik_password }}'"
+  command: "{{ _gen_cmd }}"
+  register: htpasswd_out
+  changed_when: false
+
+- name: Set traefik_basic_auth (use vault hash if present, else generated)
+  set_fact:
+    traefik_basic_auth: "{{ htpasswd_out.stdout }}"
+
+- name: Generate Traefik configuration files
+  template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "{{ item.mode | default('0644') }}"
+  loop:
+    - { src: docker-compose.yml.j2, dest: "{{ traefik_install_path }}/docker-compose.yml" }
+    - { src: traefik.yml.j2, dest: "{{ traefik_install_path }}/traefik.yml" }
+    - { src: dynamic-conf.yml.j2, dest: "{{ traefik_install_path }}/conf.d/dynamic.yml" }
+  notify: restart traefik
+
+- name: Start Traefik
+  community.docker.docker_compose_v2:
+    project_src: "{{ traefik_install_path }}"
+    state: present
+
+- name: Wait for Traefik container to be running
+  shell: docker ps -q -f name=traefik -f status=running
+  register: traefik_container
+  until: traefik_container.stdout != ""
+  retries: 30
+  delay: 5
+
+- name: Check Traefik health via docker
+  shell: docker exec traefik traefik healthcheck
+  register: traefik_health
+  failed_when: false
+  changed_when: false
+
+- name: Wait for certificates to be obtained
+  pause:
+    seconds: 30
+    prompt: "Waiting for Let's Encrypt certificate provisioning..."
+
+- name: Check Traefik logs for rate limit errors
+  shell: |
+    docker logs traefik 2>&1 | tail -n 100 | grep -i "rate limit" || true
+  register: rate_limit_check
+  changed_when: false
+
+- name: Check if production certificates were obtained
+  shell: |
+    docker exec traefik sh -c 'test -s /acme.json && cat /acme.json' | grep -q '"Certificates"' && echo "success" || echo "failed"
+  register: cert_check
+  changed_when: false
+
+- name: Display certificate status
+  debug:
+    msg: |
+      Certificate provisioning status:
+      {% if rate_limit_check.stdout %}
+      WARNING: Rate limit detected. Consider waiting or using staging certificates.
+      {% endif %}
+      {% if cert_check.stdout == 'success' %}
+      Production certificates obtained successfully.
+      {% else %}
+      Production certificates not yet obtained. Traefik will retry automatically.
+      {% endif %}
+
+- name: Create certificate fallback script
+  copy:
+    dest: /usr/local/bin/traefik-cert-fallback.sh
+    mode: '0755'
+    content: |
+      #!/bin/bash
+      # Script to switch between production and staging Let's Encrypt
+      
+      TRAEFIK_PATH="{{ traefik_install_path }}"
+      
+      check_rate_limit() {
+          docker logs traefik 2>&1 | tail -n 200 | grep -i "rate limit" > /dev/null
+          return $?
+      }
+      
+      switch_to_staging() {
+          echo "Switching to Let's Encrypt staging environment..."
+          
+          # Update all services to use staging cert resolver
+          find /opt -name "docker-compose.yml" -o -name "docker-compose.override.yml" | while read file; do
+              if grep -q "traefik.http.routers.*certresolver=letsencrypt" "$file" 2>/dev/null; then
+                  cp "$file" "$file.bak"
+                  sed -i 's/certresolver=letsencrypt/certresolver=letsencrypt-staging/g' "$file"
+                  echo "Updated: $file"
+              fi
+          done
+          
+          # Restart affected services
+          cd "$TRAEFIK_PATH" && docker compose restart
+          echo "Switched to staging environment. Note: Browsers will show certificate warnings."
+      }
+      
+      switch_to_production() {
+          echo "Switching to Let's Encrypt production environment..."
+          
+          # Update all services to use production cert resolver
+          find /opt -name "docker-compose.yml" -o -name "docker-compose.override.yml" | while read file; do
+              if grep -q "traefik.http.routers.*certresolver=letsencrypt-staging" "$file" 2>/dev/null; then
+                  cp "$file" "$file.bak"
+                  sed -i 's/certresolver=letsencrypt-staging/certresolver=letsencrypt/g' "$file"
+                  echo "Updated: $file"
+              fi
+          done
+          
+          # Restart affected services
+          cd "$TRAEFIK_PATH" && docker compose restart
+          echo "Switched to production environment."
+      }
+      
+      case "$1" in
+          staging)
+              switch_to_staging
+              ;;
+          production)
+              switch_to_production
+              ;;
+          check)
+              if check_rate_limit; then
+                  echo "Rate limit detected! Consider switching to staging: $0 staging"
+                  exit 1
+              else
+                  echo "No rate limit detected."
+                  exit 0
+              fi
+              ;;
+          *)
+              echo "Usage: $0 {staging|production|check}"
+              echo "  staging    - Switch to Let's Encrypt staging (self-signed certs)"
+              echo "  production - Switch to Let's Encrypt production"
+              echo "  check      - Check if rate limit has been hit"
+              exit 1
+              ;;
+      esac
+
+- name: Check and handle rate limits
+  shell: |
+    /usr/local/bin/traefik-cert-fallback.sh check
+  register: rate_limit_status
+  failed_when: false
+  changed_when: false
+
+- name: Automatically switch to staging if rate limited
+  shell: |
+    /usr/local/bin/traefik-cert-fallback.sh staging
+  when: rate_limit_status.rc != 0
+  register: staging_switch
+
+- name: Display final status
+  debug:
+    msg: |
+      {% if staging_switch is defined and staging_switch.changed %}
+      ⚠️  Rate limit detected! Automatically switched to Let's Encrypt staging environment.
+      ⚠️  Browsers will show certificate warnings (self-signed).
+      ⚠️  To switch back to production later, run: /usr/local/bin/traefik-cert-fallback.sh production
+      {% else %}
+      ✅ Traefik is running with production Let's Encrypt certificates.
+      {% endif %}
+      
+      Traefik dashboard: https://{{ traefik_subdomain }}.{{ vm_hostname }} (requires authentication)
+      
+      Certificate management script: /usr/local/bin/traefik-cert-fallback.sh

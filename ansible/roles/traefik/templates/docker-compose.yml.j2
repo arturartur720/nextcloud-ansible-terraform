@@ -1,0 +1,36 @@
+services:
+  traefik:
+    image: traefik:v3.5
+    container_name: traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - {{ traefik_install_path }}/traefik.yml:/traefik.yml:ro
+      - {{ traefik_install_path }}/conf.d:/conf.d:ro
+      - {{ traefik_acme_storage }}:/acme.json
+    networks:
+      - {{ traefik_network_name }}
+    environment:
+      - CF_API_EMAIL={{ admin_email }}
+      - TZ=Europe/Tallinn
+    labels:
+      - "traefik.enable={{ traefik_dashboard_enabled }}"
+      - "traefik.http.routers.api.rule=Host(`{{ traefik_subdomain }}.{{ vm_hostname }}`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+      - "traefik.http.routers.api.service=api@internal"
+      - "traefik.http.routers.api.middlewares=auth"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.routers.api.tls=true"
+      - "traefik.http.middlewares.auth.basicauth.users={{ traefik_basic_auth | replace('$', '$$') }}"
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+networks:
+  {{ traefik_network_name }}:
+    external: true

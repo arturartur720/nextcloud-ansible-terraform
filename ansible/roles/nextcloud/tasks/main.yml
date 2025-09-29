@@ -1,0 +1,147 @@
+---
+- name: Include Password generation
+  include_tasks: gen_passwords.yml
+  tags: gen_passwords
+
+- name: Create Nextcloud directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  loop:
+    - "{{ nextcloud_install_path }}"
+    - "{{ nextcloud_install_path }}/hooks/pre-installation"
+    - "{{ nextcloud_install_path }}/hooks/post-installation"
+    - "{{ nextcloud_install_path }}/hooks/pre-upgrade"
+    - "{{ nextcloud_install_path }}/hooks/post-upgrade"
+    - "{{ nextcloud_install_path }}/hooks/before-starting"
+
+- name: Copy Nextcloud docker compose file
+  template:
+    src: docker-compose.yml.j2
+    dest: "{{ nextcloud_install_path }}/docker-compose.yml"
+    mode: '0755'
+
+- name: Copy mariadb additional config
+  copy:
+    src: nextcloud.cnf
+    dest: "{{ nextcloud_install_path }}/nextcloud.cnf"
+    mode: '0644'
+
+- name: Create s3_key secret
+  template:
+    src: s3_key.txt.j2
+    dest: "{{ nextcloud_install_path }}/s3_key.txt"
+    mode: '0644'
+
+- name: Create db_password secret
+  template:
+    src: db_password.txt.j2
+    dest: "{{ nextcloud_install_path }}/db_password.txt"
+    mode: '0644'
+    force: 'no'
+    
+- name: Create db_root_password secret
+  template:
+    src: db_root_password.txt.j2
+    dest: "{{ nextcloud_install_path }}/db_root_password.txt"
+    mode: '0644'
+    force: 'no'
+    
+- name: Create nextcloud_admin_password secret
+  template:
+    src: nextcloud_admin_password.txt.j2
+    dest: "{{ nextcloud_install_path }}/nextcloud_admin_password.txt"
+    mode: '0644'
+    force: 'no'
+
+- name: Create s3_secret secret
+  template:
+    src: s3_secret.txt.j2
+    dest: "{{ nextcloud_install_path }}/s3_secret.txt"
+    mode: '0644'
+
+- name: Create s3_sse_c_key secret
+  template:
+    src: s3_sse_c_key.txt.j2
+    dest: "{{ nextcloud_install_path }}/s3_sse_c_key.txt"
+    mode: '0644'
+
+- name: Create Nextcloud database network
+  docker_network:
+    name: nextcloud_network
+
+- name: Pull Nextcloud Docker images
+  shell: |
+    cd {{ nextcloud_install_path }}
+    docker compose pull
+  register: docker_pull_result
+  retries: 3
+  delay: 10
+  until: docker_pull_result.rc == 0
+
+- name: Start Nextcloud services
+  community.docker.docker_compose_v2:
+    project_src: "{{ nextcloud_install_path }}"
+    state: present
+
+- name: Wait for Nextcloud container to be healthy
+  shell: |
+    docker inspect nextcloud | jq -r '.[0].State.Health.Status'
+  register: health_status
+  until: health_status.stdout == "healthy"
+  retries: 60
+  delay: 10
+
+- name: Configure Nextcloud post-deployment
+  shell: |
+    docker compose exec --user www-data app php occ status
+  args:
+    chdir: "{{ nextcloud_install_path }}"
+  register: nextcloud_status
+
+- name: Install recommended apps
+  shell: |
+    docker compose exec --user www-data app php occ app:install {{ item }}
+  args:
+    chdir: "{{ nextcloud_install_path }}"
+  loop:
+    - calendar
+    - contacts
+    - deck
+    - mail
+    - tasks
+    - notes
+    - groupfolders
+  ignore_errors: yes
+
+- name: Configure Nextcloud settings
+  shell: |
+    docker compose exec --user www-data app php occ config:system:set trusted_proxies 10 --value="$(docker inspect -f '{% raw %}{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}{% endraw %}' traefik)"
+    docker compose exec --user www-data app php occ config:system:set trusted_domains 0 --value="{{ nextcloud_subdomain }}.{{ vm_hostname }}"
+    docker compose exec --user www-data app php occ config:system:set default_phone_region --value='EE'
+    docker compose exec --user www-data app php occ config:system:set redis host --value='redis'
+    docker compose exec --user www-data app php occ config:system:set redis port --value='6379' --type=integer
+    docker compose exec --user www-data app php occ config:system:set redis timeout --value='0.0' --type=float
+    docker compose exec --user www-data app php occ config:system:set redis dbindex --value='0' --type=integer
+    docker compose exec --user www-data app php occ config:system:set memcache.local --value='\\OC\\Memcache\\Redis'
+    docker compose exec --user www-data app php occ config:system:set memcache.distributed --value='\\OC\\Memcache\\Redis'
+    docker compose exec --user www-data app php occ config:system:set memcache.locking --value='\\OC\\Memcache\\Redis'
+    docker compose exec --user www-data app php occ config:system:set maintenance_window_start --type=integer --value=1
+    docker compose exec --user www-data app php occ db:add-missing-indices
+    docker compose exec --user www-data app php occ db:add-missing-columns
+    docker compose exec --user www-data app php occ db:add-missing-primary-keys
+    docker compose exec --user www-data app php occ db:convert-filecache-bigint --no-interaction
+    docker compose exec --user www-data app php occ maintenance:repair --include-expensive
+    docker compose exec --user www-data app php occ background:cron
+  args:
+    chdir: "{{ nextcloud_install_path }}"
+
+- name: Create Nextcloud cron job
+  cron:
+    name: "Nextcloud background jobs"
+    minute: "*/5"
+    job: "docker compose -f {{ nextcloud_install_path }}/docker-compose.yml exec --user www-data app php cron.php"
+    user: root

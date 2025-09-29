@@ -1,0 +1,116 @@
+---
+- name: Wait for cloud-init to complete
+  command: cloud-init status --wait
+  changed_when: false
+  failed_when: false
+
+- name: Include firewall configuration
+  include_tasks: firewall.yml
+  tags: firewall
+
+- name: Wait for apt locks to be released
+  shell: |
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+      echo "Waiting for dpkg lock to be released..."
+      sleep 5
+    done
+  changed_when: false
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Upgrade all packages
+  apt:
+    upgrade: dist
+    autoremove: yes
+    autoclean: yes
+
+- name: Install base packages
+  apt:
+    name: "{{ base_packages }}"
+    state: present
+
+- name: Include fail2ban configuration
+  include_tasks: fail2ban.yml
+  tags: fail2ban
+
+- name: Configure automatic security updates
+  copy:
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades
+    content: |
+      Unattended-Upgrade::Allowed-Origins {
+          "${distro_id}:${distro_codename}-security";
+          "${distro_id}ESMApps:${distro_codename}-apps-security";
+          "${distro_id}ESM:${distro_codename}-infra-security";
+      };
+      Unattended-Upgrade::AutoFixInterruptedDpkg "true";
+      Unattended-Upgrade::MinimalSteps "true";
+      Unattended-Upgrade::Remove-Unused-Dependencies "true";
+      Unattended-Upgrade::Automatic-Reboot "false";
+
+- name: Enable unattended upgrades
+  copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Download-Upgradeable-Packages "1";
+      APT::Periodic::AutocleanInterval "7";
+      APT::Periodic::Unattended-Upgrade "1";
+
+- name: Configure sysctl for security
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: yes
+  loop:
+    - { name: 'net.ipv4.tcp_syncookies', value: '1' }
+    - { name: 'net.ipv4.ip_forward', value: '1' }
+    - { name: 'net.ipv6.conf.all.forwarding', value: '1' }
+    - { name: 'net.ipv4.conf.all.rp_filter', value: '1' }
+    - { name: 'net.ipv4.conf.default.rp_filter', value: '1' }
+    - { name: 'net.ipv4.icmp_echo_ignore_broadcasts', value: '1' }
+    - { name: 'net.ipv4.conf.all.accept_source_route', value: '0' }
+    - { name: 'net.ipv6.conf.all.accept_source_route', value: '0' }
+
+- name: Set timezone
+  timezone:
+    name: "{{ timezone }}"
+
+- name: Generate locale
+  locale_gen:
+    name: en_US.UTF-8
+    state: present
+
+- name: Check if swap file exists
+  stat:
+    path: /swapfile
+  register: swap_file_check
+
+- name: Create swap file
+  command: fallocate -l 4G /swapfile
+  when: not swap_file_check.stat.exists
+
+- name: Set swap file permissions
+  file:
+    path: /swapfile
+    mode: '0600'
+  when: not swap_file_check.stat.exists
+
+- name: Make swap file
+  command: mkswap /swapfile
+  when: not swap_file_check.stat.exists
+
+- name: Enable swap file
+  command: swapon /swapfile
+  when: 
+    - not swap_file_check.stat.exists or ansible_swaptotal_mb < 1
+  failed_when: false
+
+- name: Add swap to fstab
+  lineinfile:
+    path: /etc/fstab
+    line: '/swapfile none swap sw 0 0'
+    state: present

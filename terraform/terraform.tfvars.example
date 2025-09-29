@@ -1,0 +1,29 @@
+# Pilvio API Configuration
+pilvio = {
+    api_key = "abcd1234"
+    billing_account_id = 123456
+}
+
+pilvio_location = "tll01"  # Options: tll01, jhvi, jhv02
+
+ssh = {
+    public_key_path  = "~/.ssh/id_rsa.pub"
+    private_key_path = "~/.ssh/id_rsa"
+    known_hosts_path  = "~/.ssh/known_hosts"
+}
+
+# VM Configuration
+vm = {
+  name     = "example.com" # virtual machine name fqdn
+  username = "ubuntu"
+  password = "secure-password-here"
+  vcpu     = 2
+  memory   = 2048
+  disk     = 20
+  os_name   = "ubuntu"
+  os_version = "24.04"
+}
+
+floating_ip = "192.168.0.1" # Defined floating ip
+admin_email = "admin@example.com"
+s3_sse_key  = "QarNHUQgZY26gvK+t36SE+CjpcU=" # openssl rand -base64 20

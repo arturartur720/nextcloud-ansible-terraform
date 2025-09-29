@@ -1,0 +1,44 @@
+---
+- name: Install UFW firewall
+  apt:
+    name: ufw
+    state: present
+
+- name: Configure UFW defaults
+  ufw:
+    direction: "{{ item.direction }}"
+    policy: "{{ item.policy }}"
+  loop:
+    - { direction: 'incoming', policy: 'deny' }
+    - { direction: 'outgoing', policy: 'allow' }
+
+- name: Allow SSH access
+  ufw:
+    rule: allow
+    name: OpenSSH
+    src: "{{ item }}"
+  loop:
+    - 185.68.208.7/32
+    - 176.112.156.208/32
+
+- name: Allow HTTP and HTTPS
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop:
+    - '80'
+    - '443'
+    
+- name: Enable UFW
+  ufw:
+    state: enabled
+
+- name: Check UFW status
+  command: ufw status verbose
+  register: ufw_status
+  changed_when: false
+
+- name: Display firewall status
+  debug:
+    msg: "{{ ufw_status.stdout_lines }}"

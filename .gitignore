@@ -1,0 +1,69 @@
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+!terraform.tfvars.example
+.terraform.lock.hcl
+
+# Ansible
+*.retry
+ansible/inventory.ini
+ansible/group_vars/all/vault.yml
+*.vault
+ansible/.generated-passwords
+*.key
+
+# Ansible Vault Password Files
+.ansible-vault-pass
+ansible-vault-pass
+*.vault-pass
+*-vault-password
+.vault-password
+.vault-pw
+*.vault-pw
+vault-password*
+.ansible-vault-password*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Backup files
+*.backup
+*.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+env/
+venv/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*inventory.ini
+
+# Planning and documentation work
+planning/
+gitops/
+gitops-analysis/
+nextcloud-prompt.md
+nextcloud-prompt-improved.md
+
+# Keep production GitOps in separate repo
+etky-nextcloud-gitops/terraform/terraform.tfvars

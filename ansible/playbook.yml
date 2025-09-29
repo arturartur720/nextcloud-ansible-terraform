@@ -1,0 +1,39 @@
+---
+- name: Deploy Nextcloud on Pilvio
+  hosts: nextcloud
+  become: yes
+  gather_facts: yes
+    
+  pre_tasks:
+    - name: Wait for system to become reachable
+      wait_for_connection:
+        delay: 10
+        timeout: 300
+        
+    - name: Gather facts after connection
+      setup:
+  
+  roles:
+    - { role: common, tags: ['common', 'base'] }
+    - { role: docker, tags: ['docker'] }
+    - { role: traefik, tags: ['traefik', 'proxy'] }
+    - { role: nextcloud, tags: ['nextcloud'] }
+  
+  post_tasks:
+    - name: Check deployment status
+      block:
+        - name: Check running containers
+          command: docker ps --format "table {% raw %}{{.Names}}\t{{.Status}}{% endraw %}" --filter "status=running"
+          register: docker_status
+          changed_when: false
+
+        - name: Check local service accessibility
+          uri:
+            url: "{{ item.url }}"
+            method: GET
+            validate_certs: no
+            status_code: "{{ item.codes }}"
+            timeout: 5
+          loop:
+            - { name: "Nextcloud", url: "http://localhost:8080", codes: [200, 301, 302] }
+          register: service_checks

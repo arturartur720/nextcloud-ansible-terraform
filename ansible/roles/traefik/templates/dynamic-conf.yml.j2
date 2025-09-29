@@ -1,0 +1,22 @@
+# Dynamic configuration for Traefik
+# This file can be used for non-Docker services or additional middleware
+
+http:
+  middlewares:
+    secure-headers:
+      headers:
+        sslRedirect: true
+        stsSeconds: 15552000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: "same-origin"
+        customFrameOptionsValue: "SAMEORIGIN"
+        customRequestHeaders:
+          X-Forwarded-Proto: "https"
+    nextcloud-dav:
+      redirectRegex:
+        permanent: true
+        regex: "^https://(.*)/.well-known/(card|cal)dav"
+        replacement: "https://$${1}/remote.php/dav/"

@@ -1,0 +1,32 @@
+---
+# Traefik Configuration
+traefik_install_path: /opt/traefik
+traefik_dashboard_enabled: true
+traefik_network_name: traefik_proxy
+traefik_acme_email: "{{ admin_email }}"
+traefik_acme_storage: /opt/traefik/acme.json
+
+# System packages to install
+base_packages:
+  - ufw
+  - fail2ban
+  - curl
+  - wget
+  - vim
+  - htop
+  - net-tools
+  - unattended-upgrades
+  - apache2-utils
+  - git
+  - python3-pymysql
+  - mariadb-client
+
+# Nextcloud Configuration
+nextcloud_install_path: /opt/nextcloud
+nextcloud_db_name: nextcloud
+nextcloud_db_user: nextcloud
+nextcloud_admin_user: nextcloud
+nextcloud_network_name: nextcloud_internal
+
+# Random passowrd
+rnd_password: "{{ lookup('password', '/dev/null length=8 chars=ascii_letters,digits') }}"
