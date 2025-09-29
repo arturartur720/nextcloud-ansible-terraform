@@ -6,6 +6,11 @@ traefik_network_name: traefik_proxy
 traefik_acme_email: "{{ admin_email }}"
 traefik_acme_storage: /opt/traefik/acme.json
 
+# Allowd IP addresses for ssh
+allowed_ssh_ips:
+  - 185.68.208.7/32
+  - 176.112.156.208/32
+
 # System packages to install
 base_packages:
   - ufw
