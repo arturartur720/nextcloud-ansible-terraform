@@ -15,14 +15,11 @@ allowed_ssh_ips:
 base_packages:
   - ufw
   - fail2ban
-  - curl
   - wget
-  - vim
   - htop
   - net-tools
   - unattended-upgrades
   - apache2-utils
-  - git
   - python3-pymysql
   - mariadb-client
 

@@ -37,7 +37,7 @@ resource "pilvio_vm" "nextcloud" {
   location           = var.pilvio_location
 
   cloud_init = jsonencode({
-    packages = ["python3", "python3-pip", "curl", "git"],
+    packages = ["python3", "python3-pip"],
     runcmd = [
       "apt-get update",
       "echo 'Server provisioned successfully' > /var/log/provision.log"
